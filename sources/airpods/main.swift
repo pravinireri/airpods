@@ -47,7 +47,7 @@ final class Streamer: NSObject, CMHeadphoneMotionManagerDelegate {
         case .notDetermined:
             fputs("Requesting Motion & Fitness access...\n", stderr)
         case .restricted:
-            fputs("Motion access is restricted.\n"), stderr)
+            fputs("Motion access is restricted.\n", stderr)
             exit(1)
         case .denied:
             fputs("Motion access denied.\n", stderr)
@@ -69,7 +69,19 @@ final class Streamer: NSObject, CMHeadphoneMotionManagerDelegate {
             let attitude = motion.attitude
             let acceleration = motion.userAcceleration
             let rotation = motion.rotationRate
-            let message = "\(motion.timestamp),\(attitude.yaw),\(attitude.pitch),\(attitude.roll),\(acceleration.x),\(acceleration.y),\(acceleration.z),\(rotation.x),\(rotation.y),\(rotation.z)"            self.connection.send(content: message.data(using: .utf8), completion: .idempotent)
+            let message = """
+            \(motion.timestamp),
+            \(attitude.yaw),
+            \(attitude.pitch),
+            \(attitude.roll),
+            \(acceleration.x),
+            \(acceleration.y),
+            \(acceleration.z),
+            \(rotation.x),
+            \(rotation.y),
+            \(rotation.z)
+            """
+            self.connection.send(content: message.data(using: .utf8), completion: .idempotent)
             self.onSample?(
                 motion.timestamp,
                 attitude.yaw,
