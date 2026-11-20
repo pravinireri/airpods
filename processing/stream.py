@@ -18,6 +18,9 @@ class Sample:
     ax: float
     ay: float
     az: float
+    rx: float
+    ry: float
+    rz: float
     t: float
 
 
@@ -27,10 +30,10 @@ def parse(payload: bytes, t: float | None = None) -> Sample | None:
         parts = payload.decode("utf-8").strip().split(",")
         if len(parts) != 10:
             return None
-        yaw, pitch, roll, ax, ay, az = (float(part) for part in parts)
+        timestamp, yaw, pitch, roll, ax, ay, az, rx, ry, rz = (float(part) for part in parts)
     except (UnicodeDecodeError, ValueError):
         return None
-    return Sample(yaw, pitch, roll, ax, ay, az, time.monotonic() if t is None else t)
+    return Sample(yaw, pitch, roll, ax, ay, az, rx, ry, rz, time.monotonic() if t is None else t)
 
 
 class MotionStream:
