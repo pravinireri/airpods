@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import socket
-import time
 from dataclasses import dataclass
 
 HOST = "127.0.0.1"
@@ -33,7 +32,7 @@ def parse(payload: bytes, t: float | None = None) -> Sample | None:
         timestamp, yaw, pitch, roll, ax, ay, az, rx, ry, rz = (float(part) for part in parts)
     except (UnicodeDecodeError, ValueError):
         return None
-    return Sample(yaw, pitch, roll, ax, ay, az, rx, ry, rz, time.monotonic() if t is None else t)
+    return Sample(yaw, pitch, roll, ax, ay, az, rx, ry, rz, timestamp if t is None else t)
 
 
 class MotionStream:
