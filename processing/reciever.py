@@ -9,6 +9,15 @@ import argparse
 from control import Controller
 from sensor_adapter import SensorAdapter
 
+import math
+
+from spatial import relative_robot
+
+USER_XY = (0.0, 0.0)
+ROBOT_XY = (2.0, 0.0)
+
+HEAD_YAW_SIGN = 1.0
+
 controller = Controller()
 controller_key = None
 
@@ -67,9 +76,6 @@ class Receiver(BaseHTTPRequestHandler):
             self.send_error(400, "expected sensor logger JSON")
             return
 
-        latest = max(head, key=lambda sample: sample["time"]) if head else {}
-        values = latest.get("values", {})
-
         with lock:
             now = time.monotonic()
 
@@ -109,6 +115,29 @@ class Receiver(BaseHTTPRequestHandler):
                     flush=True,
                 )
 
+            head_yaw = 0.0
+            if last_state is not None and not last_state.calibrating:
+                head_yaw = HEAD_YAW_SIGN * last_state.yaw
+
+                relative = relative_robot(
+                    user_xy=USER_XY,
+                    robot_xy=ROBOT_XY,
+                    head_yaw=head_yaw,
+                )
+
+                bearing_text = (
+                    "same position"
+                    if relative.bearing_rad is None
+                    else f"{math.degrees(relative.bearing_rad):+.1f} deg"
+                )
+
+                print(
+                    f"head={math.degrees(head_yaw):+.1f} deg  "
+                    f"robot_distance={relative.distance_m:.2f} m  "
+                    f"robot_bearing={bearing_text}",
+                    flush=True,
+                )
+                
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"OK")
