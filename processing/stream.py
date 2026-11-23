@@ -21,6 +21,7 @@ class Sample:
     ry: float
     rz: float
     t: float
+    source: str | None = None
 
 
 def parse(payload: bytes, t: float | None = None) -> Sample | None:
