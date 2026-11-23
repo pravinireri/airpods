@@ -97,10 +97,9 @@ class Controller:
             self._cal_samples.append(sample)
             elapsed = sample.t - self._cal_start
             if elapsed >= self.calibration_s and len(self._cal_samples) >= MIN_CALIBRATION_SAMPLES:
-                count = len(self._cal_samples)
-                self._yaw0 = sum(item.yaw for item in self._cal_samples) / count
-                self._pitch0 = sum(item.pitch for item in self._cal_samples) / count
-                self._roll0 = sum(item.roll for item in self._cal_samples) / count
+                self._yaw0 = mean_angle(item.yaw for item in self._cal_samples)
+                self._pitch0 = mean_angle(item.pitch for item in self._cal_samples)
+                self._roll0 = mean_angle(item.roll for item in self._cal_samples)
                 self._calibrated = True
                 self._window.clear()
                 self._armed = False
@@ -170,6 +169,19 @@ class Controller:
         )
 
 
-def _span(values: Iterable[float]) -> float:
+def mean_angle(values: Iterable[float]) -> float:
     numbers = list(values)
-    return max(numbers) - min(numbers)
+    return math.atan2(
+        sum(math.sin(value) for value in numbers),
+        sum(math.cos(value) for value in numbers),
+    )
+
+
+def _span(values: Iterable[float]) -> float:
+    angles = sorted(value % math.tau for value in values)
+    if len(angles) < 2:
+        return 0.0
+
+    gaps = [b - a for a, b in zip(angles, angles[1:])]
+    gaps.append(angles[0] + math.tau - angles[-1])
+    return math.tau - max(gaps)
