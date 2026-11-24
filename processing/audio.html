@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Robot audio beacon</title>
+  <style>
+    body { max-width: 36rem; margin: 2rem auto; padding: 0 1rem; font: 17px/1.5 system-ui, sans-serif; color: #182336; background: #f6f8fb; }
+    h1 { font-size: 1.6rem; margin-bottom: .5rem; }
+    button { padding: .8rem 1rem; margin: .3rem .3rem .3rem 0; font: inherit; cursor: pointer; }
+    #status { padding: .8rem; background: #e6edf6; border-radius: .4rem; }
+    dl { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+    dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+    .note { font-size: .9rem; color: #49576b; }
+  </style>
+</head>
+<body>
+  <h1>Robot audio beacon</h1>
+  <p>The virtual robot is fixed 2 m ahead of your starting position. Face that direction during calibration, then turn your head and hold.</p>
+  <button id="start" type="button">Start audio</button>
+  <button id="stop" type="button" disabled>Stop audio</button>
+  <p id="status" role="status">Waiting for sensor data.</p>
+  <dl>
+    <dt>Head direction</dt><dd id="heading">—</dd>
+    <dt>Robot bearing</dt><dd id="bearing">—</dd>
+    <dt>Server update age</dt><dd id="age">—</dd>
+    <dt>Last batch interval</dt><dd id="interval">—</dd>
+    <dt>Earbud source</dt><dd id="source">—</dd>
+  </dl>
+  <p class="note">Keep Sensor Logger recording in the background and this page open. AirPods must stay connected to the iPhone. Turn Apple's Spatial Audio / Spatialize Stereo Off for this playback. Start with low phone volume.</p>
+  <p class="note">Current input may arrive in roughly one-second batches. Server update age is time since the server received data, not sensor-to-audio latency. This page checks the audio path; software readiness does not establish responsive tracking.</p>
+<script>
+"use strict";
+const el = Object.fromEntries(
+  ["start", "stop", "status", "heading", "bearing", "age", "interval", "source"]
+    .map(id => [id, document.getElementById(id)])
+);
+let context, panner, master, pulseBuffer;
+let enabled = false, gateOpen = false, state = null;
+let stateRequestedAt = 0, visibilityGeneration = 0, activeRequest = null;
+let lastPulseAt = -Infinity, requestError = "", audioError = "";
+const sources = new Set();
+
+function makeAudio() {
+  context = new AudioContext({ latencyHint: "interactive" });
+  panner = context.createPanner();
+  panner.panningModel = "HRTF";
+  panner.distanceModel = "inverse";
+  panner.refDistance = 1;
+  panner.rolloffFactor = 1;
+  // Keep the listener fixed at the origin, facing -Z. Bearing already
+  // includes the user's head rotation; rotating the listener would repeat it.
+  master = context.createGain();
+  master.gain.value = 0;
+  panner.connect(master).connect(context.destination);
+  const length = Math.round(context.sampleRate * 0.12);
+  pulseBuffer = context.createBuffer(1, length, context.sampleRate);
+  const samples = pulseBuffer.getChannelData(0);
+  let seed = 123456789;
+  for (let i = 0; i < length; i++) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    const window = Math.sin(Math.PI * i / (length - 1)) ** 2;
+    samples[i] = (seed / 4294967296 * 2 - 1) * window * 0.04;
+  }
+}
+
+function setGate(open) {
+  if (!context || open === gateOpen) return;
+  gateOpen = open;
+  master.gain.cancelScheduledValues(context.currentTime);
+  master.gain.setTargetAtTime(open ? 1 : 0, context.currentTime, 0.01);
+}
+
+function stopAudio() {
+  enabled = false;
+  setGate(false);
+  for (const source of sources) source.stop();
+  sources.clear();
+  refresh();
+}
+
+function updateAge(now) {
+  if (!state || !Number.isFinite(state.received_age_s)) return Infinity;
+  // Count the whole request duration conservatively; no clock sync required.
+  return state.received_age_s + (now - stateRequestedAt) / 1000;
+}
+
+function dataProblem(now) {
+  if (document.hidden) return "Page hidden. Return and tap Start audio.";
+  if (!state) return requestError || "Waiting for sensor data.";
+  if (state.status === "waiting") return "Waiting for headphone samples.";
+  const limit = Number.isFinite(state.stale_after_s) && state.stale_after_s > 0
+    ? state.stale_after_s : 3;
+  if (state.status === "stale" || updateAge(now) >= limit)
+    return "Sensor data stale. Audio muted.";
+  if (state.calibrating || state.status === "calibrating")
+    return "Calibrating. Face the starting direction and hold still.";
+  if (!Number.isFinite(state.robot_bearing_rad) ||
+      !Number.isFinite(state.robot_distance_m) || state.robot_distance_m <= 0)
+    return "No valid robot direction. Audio muted.";
+  if (state.ready !== true || state.status !== "ready")
+    return "Sensor state is not ready. Audio muted.";
+  return "";
+}
+
+function degrees(value) {
+  if (!Number.isFinite(value)) return "—";
+  const angle = value * 180 / Math.PI;
+  return `${angle >= 0 ? "+" : ""}${angle.toFixed(1)}°`;
+}
+
+function refresh() {
+  const now = performance.now();
+  const problem = dataProblem(now);
+  const audioRunning = context && context.state === "running";
+  const audible = enabled && audioRunning && !problem;
+  setGate(Boolean(audible));
+  el.heading.textContent = degrees(state && state.head_yaw_rad);
+  el.bearing.textContent = degrees(state && state.robot_bearing_rad);
+  const age = updateAge(now);
+  el.age.textContent = Number.isFinite(age) ? `${age.toFixed(2)} s` : "—";
+  el.interval.textContent = state && Number.isFinite(state.batch_interval_s)
+    ? `${state.batch_interval_s.toFixed(2)} s` : "—";
+  el.source.textContent = state && state.source ? state.source : "—";
+  el.stop.disabled = !enabled;
+  el.start.disabled = enabled && Boolean(audioRunning);
+  el.status.textContent = audioError || problem || (audible
+    ? "Beacon playing. Positive angles mean left."
+    : "Sensor state ready. Tap Start audio to play or resume.");
+  if (!audible) return;
+  const b = state.robot_bearing_rad, d = state.robot_distance_m;
+  panner.positionX.value = -d * Math.sin(b);
+  panner.positionY.value = 0;
+  panner.positionZ.value = -d * Math.cos(b);
+  if (now - lastPulseAt < 600) return;
+  lastPulseAt = now;
+  const source = context.createBufferSource();
+  source.buffer = pulseBuffer;
+  source.connect(panner);
+  sources.add(source);
+  source.onended = () => { source.disconnect(); sources.delete(source); };
+  source.start();
+}
+
+el.start.addEventListener("click", async () => {
+  const generation = visibilityGeneration;
+  try {
+    audioError = "";
+    if (!context) makeAudio();
+    await context.resume();
+    if (document.hidden || generation !== visibilityGeneration) return;
+    enabled = true;
+    lastPulseAt = -Infinity;
+    refresh();
+  } catch (error) {
+    enabled = false;
+    setGate(false);
+    audioError = `Audio could not start: ${error.message}`;
+    refresh();
+  }
+});
+el.stop.addEventListener("click", stopAudio);
+document.addEventListener("visibilitychange", () => {
+  visibilityGeneration++;
+  if (activeRequest) activeRequest.abort();
+  state = null;
+  requestError = "";
+  stopAudio();
+});
+
+async function pollState() {
+  if (!document.hidden) {
+    const generation = visibilityGeneration;
+    const started = performance.now();
+    const request = new AbortController();
+    activeRequest = request;
+    const timeout = setTimeout(() => request.abort(), 1500);
+    try {
+      const response = await fetch("/state", {
+        cache: "no-store", signal: request.signal
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const next = await response.json();
+      if (!next || typeof next !== "object" || typeof next.status !== "string")
+        throw new Error("Invalid state response");
+      if (!document.hidden && generation === visibilityGeneration) {
+        state = next;
+        stateRequestedAt = started;
+        requestError = "";
+      }
+    } catch (error) {
+      if (!document.hidden && generation === visibilityGeneration) {
+        state = null;
+        requestError = "Cannot reach sensor server. Audio muted.";
+      }
+    } finally {
+      clearTimeout(timeout);
+      activeRequest = null;
+      refresh();
+    }
+  }
+  setTimeout(pollState, 150);
+}
+setInterval(refresh, 100);
+pollState();
+</script>
+</body>
+</html>
